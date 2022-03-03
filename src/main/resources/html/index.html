@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
     <title>File Writer</title>
-    <link rel="stylesheet" href="static/style.css">
+    <link rel="stylesheet" href="style.css">
     <script src="https://code.jquery.com/jquery-3.6.0.min.js"
             integrity="sha256-/xUj+3OJU5yExlq6GSYGSHk7tPXikynS7ogEvDej/m4="
             crossorigin="anonymous">
@@ -16,15 +16,7 @@
     <button class="more" onclick="sendStatusCloseConnection()">Disconnect</button>
     <br>
     <div align="middle" id="placeHolder" class="card">
-        <#list entries as item>
-            <div id="div_${item.id}">
-                <input id="input_${item.id}" value="${item.text}" class="textLine"/>
-                <button id="btn_${item.id}" onclick="onClickDelete(${item.id})" class="delete">
-                    Delete
-                </button>
-                <br>
-            </div>
-        </#list>
+        <div id="list"></div>
     </div>
     <br>
 
@@ -43,17 +35,55 @@
     let allInputs = document.getElementsByTagName("input")
     let divPlaceHolder = document.getElementById("placeHolder")
     let countOfLines = allInputs.length
-
     let userName = document.getElementsByClassName("userNameField")
+    let listOfFileLines = document.getElementById("list")
+
+    function fetchFile() {
+        fetch('http://localhost:8080/file', {
+            method: 'GET'
+        })
+            .then((response) => response.json())
+            .then((data) => {
+                console.log(data)
+                listOfFileLines.innerHTML = ""
+
+                for (let i = 0; i < data.length; i++) {
+                    const currentLine = data[i];
+                    let div = document.createElement("div_" + i)
+                    div.id = "div_" + i
+                    let input = document.createElement("input")
+                    let button = document.createElement("button")
+
+                    input.value = currentLine.text
+                    input.setAttribute("id", "input_" + i)
+                    button.setAttribute("id", "btn_" + i)
+                    button.setAttribute("class", "delete")
+                    input.setAttribute("class", "textLine")
+                    button.setAttribute("onclick", "onClickDelete(" + i + ")")
+                    button.innerHTML = "Delete"
+
+                    div.appendChild(input)
+                    div.appendChild(button)
+
+                    listOfFileLines.appendChild(div)
+                }
+            })
+    }
+
+    fetchFile()
 
     let socket = new WebSocket("ws://localhost:8080/ws");
 
-    // $(window).unload(function () {
-    //     socket.close();
-    // });
-
     socket.onmessage = function (event) {
-        console.log(event.data)
+        console.log("WS LOG: " + event.data)
+        // console.log(event.data)
+        if (event.data.toString().endsWith("UpdateEvent")) {
+            console.log("UpdateEvent From WS")
+            for (let i = 0; i < countOfLines; i++) {
+                document.getElementById("div_" + i).remove()
+            }
+            fetchFile()
+        }
         if (event.data.toString().startsWith("You've logged in as")) {
             userName.item(0).innerHTML = event.data
         }
@@ -63,9 +93,6 @@
         if (event.data.toString().endsWith("Mutex is locked.")) {
             onClickDelete(countOfLines - 1)
         }
-        // if (event.data.toString().endsWith("Update Event")) {
-        //
-        // }
 
         const node = document.createElement('ul');
         node.appendChild(document.createTextNode(event.data));
@@ -73,12 +100,16 @@
             .appendChild(node)
     }
 
+    function sendUpdateEvent() {
+        socket.send("UpdateEvent")
+    }
+
     function sendStatusOpenConnection() {
-        socket.send("OpenConnection")
+        socket.send("OpenConnectionEvent")
     }
 
     function sendStatusCloseConnection() {
-        socket.send("CloseConnection")
+        socket.send("CloseConnectionEvent")
     }
 
     function onClickDelete(n) {
@@ -108,12 +139,12 @@
         let resultStr = ""
 
         for (let i = 0; i < allInputs.length; i++) {
-            let curInput = allInputs[i].value
-            resultStr += curInput
+            let currInput = allInputs[i].value
+            resultStr += currInput
             if (i !== allInputs.length - 1) resultStr += "\n"
         }
-        console.log("Result:" + resultStr)
         socket.send(resultStr)
+        sendUpdateEvent()
     }
 </script>
 

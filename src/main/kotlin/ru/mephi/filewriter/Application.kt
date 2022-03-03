@@ -1,11 +1,16 @@
 package ru.mephi.filewriter
 
+import com.fasterxml.jackson.databind.*
 import freemarker.cache.*
 import freemarker.core.HTMLOutputFormat
 import io.ktor.application.*
+import io.ktor.features.*
 import io.ktor.freemarker.*
+import io.ktor.html.*
+import io.ktor.http.*
 import io.ktor.http.cio.websocket.*
 import io.ktor.http.content.*
+import io.ktor.jackson.*
 import io.ktor.response.*
 import io.ktor.routing.*
 import io.ktor.server.engine.*
@@ -14,9 +19,7 @@ import io.ktor.websocket.*
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
-import java.time.Duration
 import java.util.*
-import kotlin.collections.LinkedHashSet
 
 const val globalFilePath = "src/main/resources/files/file.txt"
 val fileDatabase = FileDatabase(globalFilePath)
@@ -37,62 +40,84 @@ fun Connection.sendMessage(msg: String) {
 
 fun Application.module() {
     install(WebSockets)
-    install(FreeMarker) {
-        templateLoader = ClassTemplateLoader(this::class.java.classLoader, "templates")
-        outputFormat = HTMLOutputFormat.INSTANCE
+    install(ContentNegotiation) {
+        jackson {
+            enable(SerializationFeature.INDENT_OUTPUT)
+        }
     }
 
     routing {
-        static("/static") {
+        static("/") {
+            resources("html")
             resources("files")
         }
+
         val connections = Collections.synchronizedSet<Connection?>(LinkedHashSet())
         webSocket("/ws") {
             val thisConnection = Connection(this)
             connections += thisConnection
-            println("New client logged in as [${thisConnection.name}]")
+//            println("New client logged in as [${thisConnection.name}]")
             send("You've logged in as [${thisConnection.name}]")
 
             connections.forEach {
-//                if (it != thisConnection)
-                it.session.send("New client logged in as [${thisConnection.name}]")
+                if (it != thisConnection)
+                    it.session.send("New client logged in as [${thisConnection.name}]")
             }
 
             for (frame in incoming) {
                 when (frame) {
                     is Frame.Text -> {
+//                        println("Log: ${frame.readText()}")
                         when (val receivedText = frame.readText()) {
-                            "OpenConnection" -> {
+                            "OpenConnectionEvent" -> {
                                 if (!fileDatabase.lockControl(thisConnection.name)) {
                                     thisConnection.sendMessage("Unable to connect")
                                 } else thisConnection.sendMessage("Connected to file")
                             }
-                            "CloseConnection" -> {
+                            "CloseConnectionEvent" -> {
                                 if (fileDatabase.unlockControl(thisConnection.name))
                                     thisConnection.sendMessage("Disconnected from file")
                                 else
                                     thisConnection.sendMessage("Already disconnected from file")
                             }
+                            "UpdateEvent" -> {
+                                updateFile()
+                                connections.forEach {
+                                    if (it != thisConnection)
+                                        it.sendMessage("UpdateEvent")
+                                }
+                            }
                             else -> {
                                 thisConnection.sendMessage("Received data: $receivedText")
                                 if (!fileDatabase.writeFile(receivedText, thisConnection.name)) {
                                     thisConnection.sendMessage("Unable to write. Mutex is locked.")
-                                } else thisConnection.sendMessage("File successfully saved.")
+                                } else {
+                                    thisConnection.sendMessage("File successfully saved.")
+                                    connections.forEach {
+                                        if (it != thisConnection)
+                                            it.sendMessage("File updated")
+                                    }
+                                }
                             }
                         }
                     }
                 }
             }
         }
-        get("/") {
-            listOfLines.clear()
-            val strList = fileDatabase.readFile()
-            var idx = 0
-            for (str: String in strList) {
-                listOfLines.add(LineOfText(str, idx))
-                idx += 1
-            }
-            call.respond(FreeMarkerContent("index.ftl", mapOf("entries" to listOfLines), ""))
+        get("/file") {
+            updateFile()
+            call.respond(listOfLines)
         }
+    }
+
+}
+
+private fun updateFile() {
+    listOfLines.clear()
+    val strList = fileDatabase.readFile()
+    var idx = 0
+    for (str: String in strList) {
+        listOfLines.add(LineOfText(str, idx))
+        idx += 1
     }
 }
